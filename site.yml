@@ -1,0 +1,171 @@
+---
+- hosts:
+    - glusterfs
+
+  gather_facts: true
+  become: true
+
+  tasks:
+  - name: add Gluster repo
+    yum_repository:
+      name: Gluster-7
+      description: Gluster-7-repo
+      baseurl: "{{ gluster_repo_url }}"
+      gpgcheck: no
+
+  - name: install Glusterfs on nodes
+    yum:
+      name: "{{ item }}"
+    loop:
+      - glusterfs-server
+      - glusterfs-libs
+      - glusterfs-cli
+      - glusterfs
+
+  - name: restart glusterd
+    service:
+      name: glusterd
+      state: restarted
+      enabled: yes
+
+  - name: get peers ipv4 addresses
+    set_fact: 
+       ip_addresses: "{{ groups['glusterfs'] | map('extract', hostvars, ['ansible_eth1', 'ipv4', 'address']) | list | difference(ansible_facts['eth1']['ipv4'].address) }}"
+
+  - name: configure firewall
+    iptables:
+      chain: INPUT
+      source: "{{ item }}"
+      jump: ACCEPT
+    loop: "{{ ip_addresses }}"
+
+  - name: configure trusted pool
+    command: "gluster peer probe {{ item }}"
+    loop: "{{ ip_addresses }}"
+    ignore_errors: yes
+
+  - name: verify cluster status
+    command: "gluster peer status"
+    register: peer_status
+  - debug: 
+      msg: "{{ peer_status.stdout_lines }}"
+
+  - name: get relevant devices
+    shell: "lsblk -p | grep sd | grep 1G | awk '{print $1}'"
+    register: devices_output
+
+  - name: create list of pvs
+    set_fact:
+        devices_list: "{{ devices_output.stdout_lines | join(',') }}"
+
+        #- name: wipe disks
+        #shell: "wipefs -a {{ item }}"
+        #loop: "{{ devices_output.stdout_lines }}"
+
+    #- name: create physical volume
+    #lvg:
+    #  vg: "{{ vg_name }}"
+    #  pvs: "{{ devices_list }}"
+
+    #  - name: create logical volume
+    #lvol:
+    #  vg: "{{ vg_name }}"
+    #  lv: "{{ lv_name }}"
+    #  size: 100%FREE
+    #  state: present
+    #ignore_errors: yes
+
+  - name: change root password
+    user:
+      name: root
+      password: "{{ root_password | password_hash('sha512') }}"
+
+  - name: allow password authentication
+    lineinfile:
+      path: /etc/ssh/sshd_config
+      regexp: '^PasswordAuthentication.*no'
+      line: 'PasswordAuthentication=yes'
+
+  - name: allow root login
+    lineinfile:
+      path: /etc/ssh/sshd_config
+      regexp: '^#PermitRootLogin.*yes'
+      line: 'PermitRootLogin yes'
+    notify: 
+       - restart_sshd
+
+  handlers:
+  - name: restart_sshd
+    service:
+      name: sshd
+      state: restarted
+
+
+- hosts:
+    - bastions
+
+  gather_facts: true
+  become: true
+
+  tasks:
+  - name: change root password
+    user:
+      name: root
+      password: "{{ root_password | password_hash('sha512') }}"
+
+  - name: allow password authentication
+    lineinfile:
+      path: /etc/ssh/sshd_config
+      regexp: '^PasswordAuthentication.*no'
+      line: 'PasswordAuthentication=yes'
+
+  - name: allow root login
+    lineinfile:
+      path: /etc/ssh/sshd_config
+      regexp: '^#PermitRootLogin.*yes'
+      line: 'PermitRootLogin yes'
+    notify:
+       - restart_sshd
+
+  - name: create heketi directories
+    file:
+      path: "{{ item }}"
+      state: directory
+    loop:
+      - /var/lib/heketi
+      - /etc/heketi
+      - /var/log/heketi
+
+  - name: install ansible and wget
+    yum:
+      name: "{{ item }}"
+    loop:
+      - ansible
+      - wget
+
+  - name: copy hosts file
+    copy:
+      src: './bastion_hosts'
+      dest: '/etc/hosts'
+
+  - name: copy configuration json
+    copy:
+      src: './heketi_configuration.json'
+      dest: '/etc/heketi/heketi.json'
+
+  - name: copy serive file
+    copy:
+      src: './heketi.service'
+      dest: '/etc/systemd/system/heketi.service'
+
+  - name: copy ansible heketi directory
+    copy:
+      src: './projects'
+      dest: '~/'
+    
+  handlers:
+  - name: restart_sshd
+    service:
+      name: sshd
+      state: restarted
+

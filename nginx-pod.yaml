@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nginx-pod
+spec:
+  containers:
+    - name: nginx
+      image: nginx
+      volumeMounts:
+      - mountPath: '/var/www/html'
+        name: nginx-gluster-vol
+        readOnly: false
+  volumes:
+    - name: nginx-gluster-vol
+      persistentVolumeClaim:
+        claimName: gluster-pvc

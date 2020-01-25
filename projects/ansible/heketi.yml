@@ -1,0 +1,7 @@
+---
+- name: Generate Heketi topology file and copy to Heketi Server
+  hosts: bastions
+  become: yes
+  become_method: sudo
+  roles:
+    - heketi
